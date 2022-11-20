@@ -23,32 +23,43 @@ def str_range(stop: int) -> list:
 
 
 parser = argparse.ArgumentParser(description='Transfer Plex user viewstate and play history between users')
-parser.add_argument('-p', '--db-path', help='Path to com.plexapp.plugins.library.db file', type=str, required=True)
+parser.add_argument('-p', '--source-db-path', help='Path to the source com.plexapp.plugins.library.db file', type=str, required=True)
+parser.add_argument('-t', '--target-db-path', help='Path to target com.plexapp.plugins.library.db file', type=str, required=True)
 args = parser.parse_args()
 
-connection = sqlite3.connect(args.db_path)
-connection.row_factory = sqlite3.Row
+sourceConnection = sqlite3.connect(args.source-db-path)
+sourceConnection.row_factory = sqlite3.Row
 
-cursor = connection.cursor()
+targetConnection = sqlite3.connect(args.target-db-path)
+targetConnection.row_factory = sqlite3.Row
+
+sourceCursor = sourceConnection.cursor()
+targetCursor = targetConnection.cursor()
 
 # Get users
-cursor.execute('SELECT id, name, created_at FROM accounts WHERE id > 0')
-accounts = cursor.fetchall()
+sourceCursor.execute('SELECT id, name, created_at FROM accounts WHERE id > 0')
+sourceAccounts = sourceCursor.fetchall()
+
+targetCursor.execute('SELECT id, name, created_at FROM accounts WHERE id > 0')
+targetAccounts = targetCursor.fetchall()
 
 # Print users
-print(tabulate([{'index': i, 'name': accounts[i]['name']} for i in range(0, len(accounts))], headers='keys'))
+print(tabulate([{'index': i, 'name': sourceAccounts[i]['name']} for i in range(0, len(sourceAccounts))], headers='keys'))
 
 # Ask user to select source user
 sourceAccountIndex = int(get_valid_input(
     'First, please enter the _source_ account index',
-    str_range(len(accounts)),
+    str_range(len(sourceAccounts)),
     'No account with that ID, please enter a valid account index'
 ))
+
+# Print users
+print(tabulate([{'index': i, 'name': targetAccounts[i]['name']} for i in range(0, len(targetAccounts))], headers='keys'))
 
 # Ask user to select target user
 targetAccountIndex = int(get_valid_input(
     'Now, please enter the _target_ account index',
-    str_range(len(accounts)),
+    str_range(len(targetAccounts)),
     'No account with that ID, please enter a valid account index'
 ))
 
@@ -63,15 +74,15 @@ mode = get_valid_input(
 sql = 'SELECT guid, rating, view_offset, view_count, last_viewed_at, created_at, updated_at, skip_count, ' \
       'last_skipped_at, changed_at, extra_data, last_rated_at FROM metadata_item_settings ' \
       'WHERE account_id = :account_id'
-cursor.execute(sql, {'account_id': accounts[sourceAccountIndex]['id']})
-sourceViewstate = cursor.fetchall()
+sourceCursor.execute(sql, {'account_id': sourceAccounts[sourceAccountIndex]['id']})
+sourceViewstate = sourceCursor.fetchall()
 
 # Get source account play history
 sql = 'SELECT guid, metadata_type, library_section_id, grandparent_title, parent_index, parent_title, ' \
       '"index", title, thumb_url, viewed_at, grandparent_guid, originally_available_at, device_id ' \
       'FROM metadata_item_views WHERE account_id = :account_id'
-cursor.execute(sql, {'account_id': accounts[sourceAccountIndex]['id']})
-sourcePlayHistory = cursor.fetchall()
+sourceCursor.execute(sql, {'account_id': sourceAccounts[sourceAccountIndex]['id']})
+sourcePlayHistory = sourceCursor.fetchall()
 
 # Make sure source account has any viewstate items
 if len(sourceViewstate) == 0 and len(sourcePlayHistory) == 0:
@@ -79,13 +90,13 @@ if len(sourceViewstate) == 0 and len(sourcePlayHistory) == 0:
 
 # Check for existing viewstate items of target user
 sql = 'SELECT id, guid FROM metadata_item_settings WHERE account_id = :account_id'
-cursor.execute(sql, {'account_id': accounts[targetAccountIndex]['id']})
-targetViewstate = cursor.fetchall()
+targetCursor.execute(sql, {'account_id': targetAccounts[targetAccountIndex]['id']})
+targetViewstate = targetCursor.fetchall()
 
 # Check for existing play history items of target user
 sql = 'SELECT id, guid FROM metadata_item_views WHERE account_id = :account_id'
-cursor.execute(sql, {'account_id': accounts[targetAccountIndex]['id']})
-targetPlayHistory = cursor.fetchall()
+targetCursor.execute(sql, {'account_id': targetAccounts[targetAccountIndex]['id']})
+targetPlayHistory = targetCursor.fetchall()
 
 # Handle existing target account viewstates items if any were found
 if len(targetViewstate) > 0 or len(targetPlayHistory):
@@ -112,7 +123,7 @@ if len(targetViewstate) > 0 or len(targetPlayHistory):
             # If we are moving the viewstate, remove viewstate items we don't need to move from source user
             if mode in ['m', 'move']:
                 sql = 'DELETE FROM metadata_item_settings WHERE account_id = :account_id AND guid = :guid'
-                cursor.execute(sql, {'account_id': accounts[sourceAccountIndex]['id'], 'guid': guid})
+                sourceCursor.execute(sql, {'account_id': sourceAccounts[sourceAccountIndex]['id'], 'guid': guid})
 
         # Remove source account's play history accordingly
         sourcePlayHistoryGuids = [e['guid'] for e in sourcePlayHistory]
@@ -127,39 +138,39 @@ if len(targetViewstate) > 0 or len(targetPlayHistory):
                 del sourcePlayHistory[index], sourcePlayHistoryGuids[index]
                 if mode in ['m', 'move']:
                     sql = 'DELETE FROM metadata_item_views WHERE account_id = :account_id AND guid = :guid'
-                    cursor.execute(sql, {'account_id': accounts[sourceAccountIndex]['id'], 'guid': guid})
+                    sourceCursor.execute(sql, {'account_id': sourceAccounts[sourceAccountIndex]['id'], 'guid': guid})
     elif handleExisting in ['r', 'replace']:
         # Remove existing viewstate items
         for entry in targetViewstate:
             sql = 'DELETE FROM metadata_item_settings WHERE id = :id'
-            cursor.execute(sql, {'id': entry['id']})
+            targetCursor.execute(sql, {'id': entry['id']})
 
         # Remove existing play history items
         for entry in targetPlayHistory:
             sql = 'DELETE FROM metadata_item_views WHERE id = :id'
-            cursor.execute(sql, {'id': entry['id']})
+            targetCursor.execute(sql, {'id': entry['id']})
 
 if mode in ['c', 'copy']:
     print(f'Copying viewstate ({len(sourceViewstate)} items) and play history ({len(sourcePlayHistory)} items) '
-          f'from {accounts[sourceAccountIndex]["name"]} to {accounts[targetAccountIndex]["name"]}')
+          f'from {sourceAccounts[sourceAccountIndex]["name"]} to {targetAccounts[targetAccountIndex]["name"]}')
 
     # Copy viewstate items
     sql = 'INSERT INTO metadata_item_settings (account_id, guid, rating, view_offset, view_count, last_viewed_at, ' \
           'created_at, updated_at, skip_count, last_skipped_at, changed_at, extra_data, last_rated_at) VALUES (?, ' \
           '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
     for existingEntry in sourceViewstate:
-        newEntry = {'account_id': accounts[targetAccountIndex]['id'], **existingEntry}
-        cursor.execute(sql, list(newEntry.values()))
+        newEntry = {'account_id': targetAccounts[targetAccountIndex]['id'], **existingEntry}
+        targetCursor.execute(sql, list(newEntry.values()))
 
     # Copy play history items
     sql = 'INSERT INTO metadata_item_views (account_id, guid, metadata_type, library_section_id, grandparent_title, ' \
           'parent_index, parent_title, "index", title, thumb_url, viewed_at, grandparent_guid, ' \
           'originally_available_at, device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     for existingEntry in sourcePlayHistory:
-        newEntry = {'account_id': accounts[targetAccountIndex]['id'], **existingEntry}
-        cursor.execute(sql, list(newEntry.values()))
+        newEntry = {'account_id': targetAccounts[targetAccountIndex]['id'], **existingEntry}
+        targetCursor.execute(sql, list(newEntry.values()))
 
-    connection.commit()
+    targetConnection.commit()
 elif mode in ['m', 'move']:
     print(f'Moving viewstate ({len(sourceViewstate)} items) and play history ({len(sourcePlayHistory)} items) '
           f'from {accounts[sourceAccountIndex]["name"]} to {accounts[targetAccountIndex]["name"]}')
@@ -167,12 +178,15 @@ elif mode in ['m', 'move']:
     tables = ['metadata_item_settings', 'metadata_item_views']
     for table in tables:
         sql = f'UPDATE {table} SET account_id = :target_account_id WHERE account_id = :source_account_id'
-        cursor.execute(sql, {
+        targetCursor.execute(sql, {
             'target_account_id': accounts[targetAccountIndex]['id'],
             'source_account_id': accounts[sourceAccountIndex]['id']
         })
 
-    connection.commit()
+    targetConnection.commit()
 
-cursor.close()
-connection.close()
+sourceCursor.close()
+sourceConnection.close()
+
+targetCursor.close()
+targetConnection.close()
